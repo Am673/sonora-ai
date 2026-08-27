@@ -3,20 +3,41 @@ import { createClient } from '@supabase/supabase-js'
 import { callMusicProvider } from '@/lib/provider'
 
 export async function POST(req: Request) {
-  const token = req.headers.get('authorization')?.replace(/^Bearer\s+/i, '')
-  if (!token) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  const token = req.headers
+    .get('authorization')
+    ?.replace(/^Bearer\s+/i, '')
+
+  if (!token) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  }
 
   const sb = createClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY!,
-    { global: { headers: { Authorization: `Bearer ${token}` } } }
+    {
+      global: {
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      },
+    }
   )
 
-  const { data: { user } } = await sb.auth.getUser()
-  if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  const {
+    data: { user },
+  } = await sb.auth.getUser()
+
+  if (!user) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  }
 
   const body = await req.json().catch(() => ({}))
-  const prompt = typeof body.prompt === 'string' ? body.prompt.trim() : ''
+
+  const prompt =
+    typeof body.prompt === 'string'
+      ? body.prompt.trim()
+      : ''
+
   const duration = Number(body.duration) || 120
   const instrumental = Boolean(body.instrumental)
 
@@ -33,13 +54,20 @@ export async function POST(req: Request) {
       user_id: user.id,
       job_type: 'generate',
       status: 'queued',
-      metadata: { prompt, duration, instrumental }
+      metadata: {
+        prompt,
+        duration,
+        instrumental,
+      },
     })
     .select()
     .single()
 
   if (error) {
-    return NextResponse.json({ error: error.message }, { status: 500 })
+    return NextResponse.json(
+      { error: error.message },
+      { status: 500 }
+    )
   }
 
   try {
@@ -49,36 +77,60 @@ export async function POST(req: Request) {
         prompt,
         audio_duration: duration,
         instrumental,
-        task_type: 'text2music'
-      }
+        task_type: 'text2music',
+      },
     })
+
+    // ACE-Step returns the asynchronous task ID here.
+    const taskId =
+      provider?.task_id ??
+      provider?.taskId ??
+      provider?.id ??
+      null
+
+    if (!taskId) {
+      throw new Error(
+        'ACE-Step did not return a task_id.'
+      )
+    }
 
     await sb
       .from('sonora_jobs')
       .update({
         status: 'processing',
-        metadata: { prompt, duration, instrumental, provider }
+        metadata: {
+          prompt,
+          duration,
+          instrumental,
+          provider: 'ace-step',
+          task_id: taskId,
+        },
       })
       .eq('id', job.id)
 
     return NextResponse.json({
       id: job.id,
+      task_id: taskId,
       status: 'processing',
-      provider,
-      message: 'Song generation started.'
+      message: 'Song generation started.',
     })
   } catch (e) {
     const message =
-      e instanceof Error ? e.message : 'Generation provider failed'
+      e instanceof Error
+        ? e.message
+        : 'Generation provider failed'
 
     await sb
       .from('sonora_jobs')
       .update({
         status: 'failed',
-        error_message: message
+        error_message: message,
       })
       .eq('id', job.id)
 
-    return NextResponse.json({ error: message }, { status: 502 })
+    return NextResponse.json(
+      { error: message },
+      { status: 502 }
+    )
   }
 }
